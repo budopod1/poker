@@ -7,7 +7,7 @@ import random
 
 from bot_api import PokerBotAPI, PlayerAction
 from engine.cards import Card
-from engine.poker_game import GameState
+from engine.game_state import GameState
 
 
 class RandomBot(PokerBotAPI):
@@ -29,8 +29,12 @@ class RandomBot(PokerBotAPI):
         
         # If raising, choose a random valid amount
         if action == PlayerAction.RAISE:
-            # Random raise between min_bet and max_bet
-            amount = random.randint(min_bet, max_bet)
+            # More realistic random raise - between min raise and pot size
+            max_raise = min(game_state.pot * 1.5, max_bet) # Raise up to 1.5x pot
+            if max_raise < min_bet:
+                max_raise = min_bet
+                
+            amount = random.randint(min_bet, int(max_raise))
             return action, amount
         
         # All other actions don't need an amount
@@ -40,5 +44,5 @@ class RandomBot(PokerBotAPI):
         """Track hands played"""
         self.hands_played += 1
         
-        if self.hands_played % 20 == 0:
+        if self.hands_played > 0 and self.hands_played % 50 == 0:
             self.logger.info(f"Played {self.hands_played} hands randomly")

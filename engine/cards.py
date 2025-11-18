@@ -5,6 +5,7 @@ import random
 from enum import Enum
 from typing import List, Tuple, Optional
 from dataclasses import dataclass
+from itertools import combinations
 
 
 class Suit(Enum):
@@ -34,7 +35,7 @@ class Rank(Enum):
 class Card:
     rank: Rank
     suit: Suit
-    
+
     def __str__(self) -> str:
         rank_str = {
             Rank.TWO: "2", Rank.THREE: "3", Rank.FOUR: "4", Rank.FIVE: "5",
@@ -42,15 +43,15 @@ class Card:
             Rank.TEN: "10", Rank.JACK: "J", Rank.QUEEN: "Q", Rank.KING: "K", Rank.ACE: "A"
         }
         return f"{rank_str[self.rank]}{self.suit.value}"
-    
+
     def __repr__(self) -> str:
         return self.__str__()
-    
+
     def __eq__(self, other) -> bool:
         if not isinstance(other, Card):
             return False
         return self.rank == other.rank and self.suit == other.suit
-    
+
     def __hash__(self) -> int:
         return hash((self.rank, self.suit))
 
@@ -59,21 +60,21 @@ class Deck:
     def __init__(self):
         self.cards: List[Card] = []
         self.reset()
-    
+
     def reset(self):
         """Reset deck with all 52 cards"""
         self.cards = [Card(rank, suit) for rank in Rank for suit in Suit]
-    
+
     def shuffle(self):
         """Shuffle the deck"""
         random.shuffle(self.cards)
-    
+
     def deal_card(self) -> Optional[Card]:
         """Deal one card from the top of the deck"""
         if self.cards:
             return self.cards.pop()
         return None
-    
+
     def cards_remaining(self) -> int:
         """Get number of cards remaining in deck"""
         return len(self.cards)
@@ -81,7 +82,7 @@ class Deck:
 
 class HandEvaluator:
     """Evaluates poker hands and determines winners"""
-    
+
     HAND_RANKINGS = {
         'high_card': 1,
         'pair': 2,
@@ -94,7 +95,7 @@ class HandEvaluator:
         'straight_flush': 9,
         'royal_flush': 10
     }
-    
+
     @staticmethod
     def evaluate_hand(cards: List[Card]) -> Tuple[str, List[int]]:
         """
@@ -104,96 +105,160 @@ class HandEvaluator:
         """
         if len(cards) != 5:
             raise ValueError("Hand must contain exactly 5 cards")
-        
+
         # Sort cards by rank (highest first)
         sorted_cards = sorted(cards, key=lambda x: x.rank.value, reverse=True)
         ranks = [card.rank.value for card in sorted_cards]
         suits = [card.suit for card in sorted_cards]
-        
+
         # Check for flush
         is_flush = len(set(suits)) == 1
-        
+
         # Check for straight
         is_straight = HandEvaluator._is_straight(ranks)
-        
+
         # Count ranks
         rank_counts = {}
         for rank in ranks:
             rank_counts[rank] = rank_counts.get(rank, 0) + 1
-        
+
         # Sort by count, then by rank
         count_groups = {}
         for rank, count in rank_counts.items():
             if count not in count_groups:
                 count_groups[count] = []
             count_groups[count].append(rank)
-        
+
         # Sort each group by rank (highest first)
         for count in count_groups:
             count_groups[count].sort(reverse=True)
-        
+
         # Determine hand type
         counts = sorted(rank_counts.values(), reverse=True)
-        
+
         if is_straight and is_flush:
-            if ranks[0] == 14 and ranks[4] == 10:  # A-K-Q-J-10
-                return 'royal_flush', [14]
-            else:
-                return 'straight_flush', [ranks[0]]
-        elif counts == [4, 1]:
+            if ranks[0] == Rank.ACE.value and ranks[1] == Rank.KING.value:
+                return 'royal_flush', ranks
+            return 'straight_flush', ranks
+        elif counts[0] == 4:
             return 'four_of_a_kind', [count_groups[4][0], count_groups[1][0]]
         elif counts == [3, 2]:
             return 'full_house', [count_groups[3][0], count_groups[2][0]]
         elif is_flush:
             return 'flush', ranks
         elif is_straight:
-            return 'straight', [ranks[0]]
-        elif counts == [3, 1, 1]:
+            if ranks == [14, 5, 4, 3, 2]: # Ace-low straight
+                return 'straight', [5, 4, 3, 2, 1]
+            return 'straight', ranks
+        elif counts[0] == 3:
             return 'three_of_a_kind', [count_groups[3][0]] + sorted(count_groups[1], reverse=True)
         elif counts == [2, 2, 1]:
             pairs = sorted(count_groups[2], reverse=True)
             return 'two_pair', pairs + [count_groups[1][0]]
-        elif counts == [2, 1, 1, 1]:
+        elif counts[0] == 2:
             return 'pair', [count_groups[2][0]] + sorted(count_groups[1], reverse=True)
         else:
             return 'high_card', ranks
-    
+
     @staticmethod
     def _is_straight(ranks: List[int]) -> bool:
         """Check if ranks form a straight"""
         # Handle ace-low straight (A-2-3-4-5)
-        if ranks == [14, 5, 4, 3, 2]:
+        if sorted(ranks) == [2, 3, 4, 5, 14]:
             return True
         
-        # Check normal straight
-        for i in range(1, len(ranks)):
-            if ranks[i-1] - ranks[i] != 1:
-                return False
-        return True
-    
+        unique_ranks = sorted(list(set(ranks)), reverse=True)
+        if len(unique_ranks) < 5:
+            return False
+
+        for i in range(len(unique_ranks) - 4):
+            if unique_ranks[i] - unique_ranks[i+4] == 4:
+                return True
+        return False
+
     @staticmethod
-    def compare_hands(hand1: List[Card], hand2: List[Card]) -> int:
+    def evaluate_best_hand(all_cards: List[Card]) -> Tuple[str, List[int], List[Card]]:
         """
-        Compare two hands
-        Returns: 1 if hand1 wins, -1 if hand2 wins, 0 if tie
+        Evaluates the best 5-card hand from a list of cards.
+        Returns: (hand_type, tie_breakers, best_hand_cards)
         """
-        hand1_type, hand1_tiebreakers = HandEvaluator.evaluate_hand(hand1)
-        hand2_type, hand2_tiebreakers = HandEvaluator.evaluate_hand(hand2)
+        if len(all_cards) < 5:
+            raise ValueError("Must have at least 5 cards to evaluate.")
+
+        best_hand_combination = None
+        best_hand_type = ''
+        best_tiebreakers = []
+        best_rank = -1
+
+        for hand_combination in combinations(all_cards, 5):
+            hand_list = list(hand_combination)
+            hand_type, tiebreakers = HandEvaluator.evaluate_hand(hand_list)
+            rank = HandEvaluator.HAND_RANKINGS[hand_type]
+
+            if rank > best_rank:
+                best_rank = rank
+                best_hand_type = hand_type
+                best_tiebreakers = tiebreakers
+                best_hand_combination = hand_list
+            elif rank == best_rank:
+                # Compare tiebreakers for hands of the same rank
+                for i in range(len(tiebreakers)):
+                    if tiebreakers[i] > best_tiebreakers[i]:
+                        best_hand_type = hand_type
+                        best_tiebreakers = tiebreakers
+                        best_hand_combination = hand_list
+                        break
+                    elif tiebreakers[i] < best_tiebreakers[i]:
+                        break
         
-        # Compare hand rankings
-        hand1_rank = HandEvaluator.HAND_RANKINGS[hand1_type]
-        hand2_rank = HandEvaluator.HAND_RANKINGS[hand2_type]
+        return best_hand_type, best_tiebreakers, best_hand_combination
+
+    @staticmethod
+    def get_winners(player_hands: List[Tuple[str, List[Card]]]) -> List[str]:
+        """
+        Compare multiple hands and determine the winner(s)
+        player_hands: A list of tuples, each containing (player_id, cards)
+        Returns: A list of player_ids who are winners
+        """
+        if not player_hands:
+            return []
+
+        best_hands = {}  # player_id -> (hand_type, tiebreakers)
+
+        for player_id, all_cards in player_hands:
+            hand_type, tiebreakers, _ = HandEvaluator.evaluate_best_hand(all_cards)
+            best_hands[player_id] = (hand_type, tiebreakers)
+
+        winners = []
+        best_hand_so_far = None
+
+        for player_id, hand_info in best_hands.items():
+            if not best_hand_so_far:
+                best_hand_so_far = hand_info
+                winners = [player_id]
+                continue
+
+            hand_rank = HandEvaluator.HAND_RANKINGS[hand_info[0]]
+            best_rank = HandEvaluator.HAND_RANKINGS[best_hand_so_far[0]]
+
+            if hand_rank > best_rank:
+                best_hand_so_far = hand_info
+                winners = [player_id]
+            elif hand_rank == best_rank:
+                # Same hand type, compare tiebreakers
+                tiebreakers = hand_info[1]
+                best_tiebreakers = best_hand_so_far[1]
+                is_tie = True
+                for i in range(len(tiebreakers)):
+                    if tiebreakers[i] > best_tiebreakers[i]:
+                        best_hand_so_far = hand_info
+                        winners = [player_id]
+                        is_tie = False
+                        break
+                    elif tiebreakers[i] < best_tiebreakers[i]:
+                        is_tie = False
+                        break
+                if is_tie:
+                    winners.append(player_id)
         
-        if hand1_rank > hand2_rank:
-            return 1
-        elif hand1_rank < hand2_rank:
-            return -1
-        
-        # Same hand type, compare tiebreakers
-        for t1, t2 in zip(hand1_tiebreakers, hand2_tiebreakers):
-            if t1 > t2:
-                return 1
-            elif t1 < t2:
-                return -1
-        
-        return 0  # Perfect tie
+        return winners

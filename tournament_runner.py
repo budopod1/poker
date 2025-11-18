@@ -9,7 +9,8 @@ from datetime import datetime
 import json
 import os
 
-from engine.poker_game import PokerGame, PlayerAction, GameState
+from engine.poker_game import PokerGame
+from engine.game_state import GameState, PlayerAction
 from engine.cards import HandEvaluator
 from tournament import PokerTournament, TournamentSettings, TournamentType
 from bot_manager import BotManager
@@ -78,12 +79,6 @@ class TournamentRunner:
             # Initialize tournament
             self.tournament = PokerTournament(loaded_bots, self.settings)
             
-            # Notify bots tournament is starting
-            for bot_name in loaded_bots:
-                bot_wrapper = self.bot_manager.get_bot(bot_name)
-                if bot_wrapper:
-                    bot_wrapper.tournament_start(loaded_bots, self.settings.starting_chips)
-            
             # Main tournament loop
             while not self.tournament.is_tournament_complete():
                 self.run_tournament_round()
@@ -97,11 +92,6 @@ class TournamentRunner:
             final_results = self.tournament.get_final_results()
             end_time = time.time()
             
-            # Notify bots tournament is over
-            for bot_name in loaded_bots:
-                bot_wrapper = self.bot_manager.get_bot(bot_name)
-                if bot_wrapper:
-                    bot_wrapper.tournament_end(final_results)
             
             # Compile final tournament data
             self.tournament_results = {
@@ -115,7 +105,6 @@ class TournamentRunner:
                     'time_limit': self.settings.time_limit_per_action
                 },
                 'bot_stats': self.bot_manager.get_bot_stats(),
-                'hand_histories': self.hand_histories[-50:]  # Keep last 50 hands
             }
             
             self.save_tournament_results()
@@ -140,18 +129,20 @@ class TournamentRunner:
         # Start games on all active tables
         self.current_games = {}
         for table_id, table in active_tables.items():
-            players = table.get_active_players()
-            if len(players) >= 2:
+            player_ids = table.get_active_players()
+            if len(player_ids) >= 2:
                 small_blind, big_blind = table.get_current_blinds()
                 
+                bots = {pid: self.bot_manager.get_bot(pid) for pid in player_ids}
+
                 # Create poker game for this table
-                game = PokerGame(players, 
+                game = PokerGame(bots, 
                                starting_chips=0,  # Will use tournament chip counts
                                small_blind=small_blind, 
                                big_blind=big_blind)
                 
                 # Set actual chip counts from tournament
-                for player in players:
+                for player in player_ids:
                     game.player_chips[player] = self.tournament.player_stats[player].chips
                 
                 self.current_games[table_id] = game
@@ -170,140 +161,21 @@ class TournamentRunner:
         """Play a single hand of poker on one table"""
         self.logger.info(f"Starting hand #{self.tournament.current_hand + 1} on table {table_id}")
         
-        # Initialize hand history
-        hand_history = {
-            'hand_number': self.tournament.current_hand + 1,
-            'table_id': table_id,
-            'players': game.active_players.copy(),
-            'starting_chips': game.player_chips.copy(),
-            'actions': [],
-            'community_cards': [],
-            'results': {}
-        }
-        
         try:
-            # Start the hand
-            game.start_hand()
-            hand_history['community_cards'] = [str(card) for card in game.community_cards]
-            
-            # Play through all betting rounds
-            while not game.is_hand_complete():
-                if game.is_betting_round_complete():
-                    game.advance_to_next_round()
-                    hand_history['community_cards'] = [str(card) for card in game.community_cards]
-                    continue
-                
-                current_player = game.get_current_player()
-                if not current_player or current_player not in game.active_players:
-                    break
-                
-                # Get bot action
-                action, amount = self.get_bot_action(current_player, game)
-                
-                # Record action
-                hand_history['actions'].append({
-                    'player': current_player,
-                    'action': action.value,
-                    'amount': amount,
-                    'round': game.round_name
-                })
-                
-                # Process action
-                success = game.process_action(current_player, action, amount)
-                if not success:
-                    self.logger.warning(f"Failed to process action for {current_player}: {action.value} {amount}")
-                    # Force fold on invalid action
-                    game.process_action(current_player, PlayerAction.FOLD, 0)
-            
-            # Determine winners
-            if len(game.active_players) > 0:
-                winners_and_winnings = game.determine_winners()
-                
-                # Update tournament chip counts
-                for player, winnings in winners_and_winnings:
-                    new_chips = game.player_chips[player] + winnings
-                    self.tournament.update_player_chips(player, new_chips)
-                    self.tournament.record_hand_result(player, True, winnings)
-                
-                # Record losers
-                for player in game.players:
-                    if player not in [w[0] for w in winners_and_winnings]:
-                        final_chips = game.player_chips[player]
-                        self.tournament.update_player_chips(player, final_chips)
-                        self.tournament.record_hand_result(player, False, 0)
-                
-                hand_history['results'] = {
-                    'winners': [w[0] for w in winners_and_winnings],
-                    'winnings': dict(winners_and_winnings),
-                    'final_chips': game.player_chips.copy()
-                }
-            
-            # Notify bots of hand completion
-            self.notify_bots_hand_complete(game, hand_history)
-            
+            # The game loop is now handled by the PokerGame itself
+            final_chips = game.play_hand()
+
+            # Update tournament chip counts from the game's final state
+            for player_id, chips in final_chips.items():
+                self.tournament.update_player_chips(player_id, chips)
+
+            self.logger.info(f"Hand #{self.tournament.current_hand + 1} complete on table {table_id}")
+
         except Exception as e:
             self.logger.error(f"Error in hand on table {table_id}: {str(e)}")
-            hand_history['error'] = str(e)
-        
-        # Store hand history
-        self.hand_histories.append(hand_history)
-        
-        # Log hand summary
-        if 'results' in hand_history:
-            winners = hand_history['results']['winners']
-            self.logger.info(f"Hand #{self.tournament.current_hand + 1} complete. Winners: {winners}")
-    
-    def get_bot_action(self, player_name: str, game: PokerGame) -> tuple:
-        """Get action from a bot with proper error handling"""
-        bot_wrapper = self.bot_manager.get_bot(player_name)
-        if not bot_wrapper:
-            self.logger.error(f"No bot found for player {player_name}")
-            return PlayerAction.FOLD, 0
-        
-        # Get game state and player's cards
-        game_state = game.get_game_state()
-        player_hand = game.get_player_hand(player_name)
-        if not player_hand:
-            return PlayerAction.FOLD, 0
-        
-        # Get legal actions
-        legal_actions = get_legal_actions(game_state, player_name)
-        
-        # Calculate betting limits
-        player_chips = game_state.player_chips[player_name]
-        player_bet = game_state.player_bets[player_name]
-        min_bet = game_state.current_bet + game_state.big_blind
-        max_bet = player_chips + player_bet
-        
-        # Get bot's decision
-        try:
-            action, amount = bot_wrapper.get_action(
-                game_state, player_hand.cards, legal_actions, min_bet, max_bet
-            )
-            return action, amount
-        except Exception as e:
-            self.logger.error(f"Error getting action from {player_name}: {str(e)}")
-            return PlayerAction.FOLD, 0
-    
-    def notify_bots_hand_complete(self, game: PokerGame, hand_history: Dict[str, Any]):
-        """Notify all bots that the hand is complete"""
-        game_state = game.get_game_state()
-        
-        # Build hand result
-        hand_result = {
-            'winners': hand_history['results'].get('winners', []),
-            'pot_distribution': hand_history['results'].get('winnings', {}),
-            'final_pot': game.pot,
-            'community_cards': game.community_cards,
-            'showdown_hands': {}  # Could add actual hands if there was a showdown
-        }
-        
-        # Notify all players who participated
-        for player in hand_history['players']:
-            bot_wrapper = self.bot_manager.get_bot(player)
-            if bot_wrapper:
-                bot_wrapper.hand_complete(game_state, hand_result)
-    
+            # Even if a hand fails, we should probably check player chip counts
+            # and eliminate those with zero chips. For now, we'll log the error.
+
     def save_tournament_results(self):
         """Save tournament results to file"""
         if not self.tournament_results:

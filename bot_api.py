@@ -5,7 +5,7 @@ This defines the interface that all student bots must implement
 from abc import ABC, abstractmethod
 from typing import List, Dict, Optional
 from engine.cards import Card
-from engine.poker_game import GameState, PlayerAction
+from engine.game_state import GameState, PlayerAction
 import logging
 
 
