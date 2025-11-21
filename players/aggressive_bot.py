@@ -44,12 +44,22 @@ class AggressiveBot(PokerBotAPI):
             # Raise 3-4x the big blind
             raise_amount = min(random.randint(3, 4) * game_state.big_blind, max_bet)
             raise_amount = max(raise_amount, min_bet)
-            return PlayerAction.RAISE, raise_amount
+            
+            # Ensure raise amount is actually greater than current_bet if raising
+            if raise_amount > game_state.current_bet:
+                return PlayerAction.RAISE, raise_amount
+            elif PlayerAction.CALL in legal_actions:
+                return PlayerAction.CALL, 0
+            elif PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
         
         if PlayerAction.CALL in legal_actions:
             return PlayerAction.CALL, 0
             
-        return PlayerAction.CHECK, 0
+        if PlayerAction.CHECK in legal_actions:
+            return PlayerAction.CHECK, 0
+
+        return PlayerAction.FOLD, 0
 
     def _postflop_strategy(self, game_state: GameState, hole_cards: List[Card], 
                            legal_actions: List[PlayerAction], min_bet: int, max_bet: int) -> tuple:
@@ -64,9 +74,18 @@ class AggressiveBot(PokerBotAPI):
                 # Bet 2/3 to full pot
                 raise_amount = min(game_state.pot, max_bet)
                 raise_amount = max(raise_amount, min_bet)
-                return PlayerAction.RAISE, raise_amount
+                
+                if raise_amount > game_state.current_bet:
+                    return PlayerAction.RAISE, raise_amount
+                elif PlayerAction.CALL in legal_actions:
+                    return PlayerAction.CALL, 0
+                elif PlayerAction.CHECK in legal_actions:
+                    return PlayerAction.CHECK, 0
+            
             if PlayerAction.CALL in legal_actions:
                 return PlayerAction.CALL, 0
+            if PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
         
         # Strong draw - play aggressively (semi-bluff)
         if self._has_strong_draw(all_cards):
@@ -74,9 +93,18 @@ class AggressiveBot(PokerBotAPI):
                  # Bet half pot on a draw
                 raise_amount = min(game_state.pot // 2, max_bet)
                 raise_amount = max(raise_amount, min_bet)
-                return PlayerAction.RAISE, raise_amount
+                
+                if raise_amount > game_state.current_bet:
+                    return PlayerAction.RAISE, raise_amount
+                elif PlayerAction.CALL in legal_actions:
+                    return PlayerAction.CALL, 0
+                elif PlayerAction.CHECK in legal_actions:
+                    return PlayerAction.CHECK, 0
+            
             if PlayerAction.CALL in legal_actions:
                 return PlayerAction.CALL, 0
+            if PlayerAction.CHECK in legal_actions:
+                return PlayerAction.CHECK, 0
 
         # Bluffing opportunity?
         # If no one has bet, take a stab at the pot
@@ -84,8 +112,11 @@ class AggressiveBot(PokerBotAPI):
             bluff_raise = min(game_state.pot // 2, max_bet)
             bluff_raise = max(bluff_raise, min_bet)
             if random.random() < 0.25: # Bluff 25% of the time
-                return PlayerAction.RAISE, bluff_raise
-
+                if bluff_raise > game_state.current_bet:
+                    return PlayerAction.RAISE, bluff_raise
+                elif PlayerAction.CHECK in legal_actions:
+                    return PlayerAction.CHECK, 0
+        
         if PlayerAction.CHECK in legal_actions:
             return PlayerAction.CHECK, 0
         
